@@ -10,17 +10,14 @@ import (
 
 type Node struct {
 	*maelstrom.Node
-	mu        sync.RWMutex
-	messages  []int
-	neiMu     sync.RWMutex
-	neighbors []string
+	mu       sync.RWMutex
+	messages map[int]struct{}
 }
 
 func NewNode() *Node {
 	return &Node{
-		Node:      maelstrom.NewNode(),
-		messages:  []int{},
-		neighbors: []string{},
+		Node:     maelstrom.NewNode(),
+		messages: make(map[int]struct{}),
 	}
 }
 
@@ -44,53 +41,61 @@ func (n *Node) HandleEcho(msg maelstrom.Message) error {
 }
 
 func (n *Node) HandleBroadcast(msg maelstrom.Message) error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	var broadcast broadcastMsg
-	if err := json.Unmarshal(msg.Body, &broadcast); err != nil {
+	var body map[string]any
+	if err := json.Unmarshal(msg.Body, &body); err != nil {
 		return err
 	}
 
-	n.messages = append(n.messages, broadcast.Message)
-
-	body := map[string]any{}
-	body["type"] = "broadcast_ok"
-	for _, neighbor := range n.neighbors {
-		if err := n.Send(neighbor, maelstrom.Message{
-			Dest: neighbor,
-			Src:  n.ID(),
-			Body: msg.Body,
-		}); err != nil {
-			log.Printf("Error sending to %s: %s", neighbor, err)
-		}
+	id := int(body["message"].(float64))
+	n.mu.Lock()
+	if _, exists := n.messages[id]; exists {
+		n.mu.Unlock()
+		return nil
 	}
-	return n.Reply(msg, body)
+	n.messages[id] = struct{}{}
+	n.mu.Unlock()
+
+	for _, dst := range n.NodeIDs() {
+		if dst == msg.Src || dst == n.ID() {
+			continue
+		}
+
+		dst := dst
+		go func() {
+			if err := n.Send(dst, body); err != nil {
+				panic(err)
+			}
+		}()
+	}
+
+	return n.Reply(msg, map[string]any{
+		"type": "broadcast_ok",
+	})
 }
 
 func (n *Node) HandleRead(msg maelstrom.Message) error {
 	n.mu.RLock()
-	defer n.mu.RUnlock()
+	messages := make([]int, 0, len(n.messages))
+	for k := range n.messages {
+		messages = append(messages, k)
+	}
+	n.mu.RUnlock()
+
 	body := map[string]any{}
 	body["type"] = "read_ok"
-	body["messages"] = n.messages
+	body["messages"] = messages
 	return n.Reply(msg, body)
 }
 
 func (n *Node) HandleTopology(msg maelstrom.Message) error {
-	n.neiMu.Lock()
-	defer n.neiMu.Unlock()
-
 	var top topologyMsg
 	if err := json.Unmarshal(msg.Body, &top); err != nil {
 		return err
 	}
 
-	body := map[string]any{}
-	body["type"] = "topology_ok"
-
-	n.neighbors = append(n.neighbors, top.Topology[n.ID()]...)
-	return n.Reply(msg, body)
+	return n.Reply(msg, map[string]any{
+		"type": "topology_ok",
+	})
 }
 
 func main() {
