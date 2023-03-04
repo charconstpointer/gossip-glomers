@@ -18,8 +18,9 @@ type Node struct {
 
 func NewNode() *Node {
 	return &Node{
-		Node:     maelstrom.NewNode(),
-		messages: []int{},
+		Node:      maelstrom.NewNode(),
+		messages:  []int{},
+		neighbors: []string{},
 	}
 }
 
@@ -31,10 +32,6 @@ type broadcastMsg struct {
 type topologyMsg struct {
 	Topology map[string][]string `json:"topology"`
 	Type     string              `json:"type"`
-}
-
-type echoMsg struct {
-	Type string `json:"type"`
 }
 
 func (n *Node) HandleEcho(msg maelstrom.Message) error {
@@ -59,6 +56,15 @@ func (n *Node) HandleBroadcast(msg maelstrom.Message) error {
 
 	body := map[string]any{}
 	body["type"] = "broadcast_ok"
+	for _, neighbor := range n.neighbors {
+		if err := n.Send(neighbor, maelstrom.Message{
+			Dest: neighbor,
+			Src:  n.ID(),
+			Body: msg.Body,
+		}); err != nil {
+			log.Printf("Error sending to %s: %s", neighbor, err)
+		}
+	}
 	return n.Reply(msg, body)
 }
 
