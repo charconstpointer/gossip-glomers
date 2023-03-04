@@ -10,8 +10,10 @@ import (
 
 type Node struct {
 	*maelstrom.Node
-	mu       sync.RWMutex
-	messages []int
+	mu        sync.RWMutex
+	messages  []int
+	neiMu     sync.RWMutex
+	neighbors []string
 }
 
 func NewNode() *Node {
@@ -19,6 +21,20 @@ func NewNode() *Node {
 		Node:     maelstrom.NewNode(),
 		messages: []int{},
 	}
+}
+
+type broadcastMsg struct {
+	Type    string `json:"type"`
+	Message int    `json:"message"`
+}
+
+type topologyMsg struct {
+	Topology map[string][]string `json:"topology"`
+	Type     string              `json:"type"`
+}
+
+type echoMsg struct {
+	Type string `json:"type"`
 }
 
 func (n *Node) HandleEcho(msg maelstrom.Message) error {
@@ -33,11 +49,13 @@ func (n *Node) HandleEcho(msg maelstrom.Message) error {
 func (n *Node) HandleBroadcast(msg maelstrom.Message) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	var res map[string]any
-	if err := json.Unmarshal(msg.Body, &res); err != nil {
+
+	var broadcast broadcastMsg
+	if err := json.Unmarshal(msg.Body, &broadcast); err != nil {
 		return err
 	}
-	n.messages = append(n.messages, int(res["message"].(float64)))
+
+	n.messages = append(n.messages, broadcast.Message)
 
 	body := map[string]any{}
 	body["type"] = "broadcast_ok"
@@ -54,8 +72,18 @@ func (n *Node) HandleRead(msg maelstrom.Message) error {
 }
 
 func (n *Node) HandleTopology(msg maelstrom.Message) error {
+	n.neiMu.Lock()
+	defer n.neiMu.Unlock()
+
+	var top topologyMsg
+	if err := json.Unmarshal(msg.Body, &top); err != nil {
+		return err
+	}
+
 	body := map[string]any{}
 	body["type"] = "topology_ok"
+
+	n.neighbors = append(n.neighbors, top.Topology[n.ID()]...)
 	return n.Reply(msg, body)
 }
 
